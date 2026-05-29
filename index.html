@@ -2,31 +2,17 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <!-- iPadの全画面アプリ（PWA）に対応させるための設定 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>あつまれ！ねこちゃんダッシュ</title>
+    <title>スーパーねこちゃんダッシュ！</title>
     <style>
         body {
-            margin: 0;
-            padding: 0;
-            background-color: #AEEEEE; /* 優しい水色 */
-            overflow: hidden;
-            touch-action: none; /* 画面のスクロールやズームを完全に禁止 */
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
+            margin: 0; padding: 0; background-color: #AEEEEE; overflow: hidden;
+            touch-action: none; display: flex; justify-content: center; align-items: center; height: 100vh;
             font-family: 'Helvetica Neue', Arial, sans-serif;
         }
-        canvas {
-            background-color: #E0FFFF;
-            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
-            border-radius: 12px;
-            max-width: 100%;
-            max-height: 100%;
-        }
+        canvas { background-color: #E0FFFF; box-shadow: 0 8px 16px rgba(0,0,0,0.2); border-radius: 12px; max-width: 100%; max-height: 100%; }
     </style>
 </head>
 <body>
@@ -37,52 +23,136 @@
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
 
-    // ゲームの状態管理 ('SELECT' = キャラ選択, 'PLAY' = ゲーム中, 'GAMEOVER' = ゲームオーバー)
     let gameState = 'SELECT'; 
     let score = 0;
     let frameCount = 0;
-    let isPressing = false; // 長押し判定用
+    let isPressing = false;
 
-    // 6種類の猫キャラクター
+    // キャラクター
     const catTypes = [
-        { emoji: '🐱', name: 'まるねこ' },
-        { emoji: '🐈‍⬛', name: 'くろねこ' },
-        { emoji: '🐈', name: 'ちゃとら' },
-        { emoji: '😻', name: 'らぶねこ' },
-        { emoji: '😸', name: 'にこねこ' },
-        { emoji: '🐾', name: '肉きゅう' }
+        { emoji: '🐱', name: 'まるねこ' }, { emoji: '🐈‍⬛', name: 'くろねこ' }, { emoji: '🐈', name: 'ちゃとら' },
+        { emoji: '😻', name: 'らぶねこ' }, { emoji: '😸', name: 'にこねこ' }, { emoji: '🐾', name: '肉きゅう' }
     ];
     let selectedCat = '🐱';
 
-    // プレイヤー（猫）のデータ
+    // プレイヤー（猫）
     const player = {
-        x: 150,
-        y: 200,
-        size: 50,
-        vy: 0,
-        gravity: 0.5,     // 離した時の落ちる強さ
-        upForce: -0.8,    // 長押しした時の浮き上がる強さ
-        speedLimit: 8     // 最大速度
+        x: 150, y: 200, size: 50, baseSize: 50, vy: 0,
+        gravity: 0.5, upForce: -0.8, speedLimit: 8,
+        isInvincible: false, invincibleTimer: 0 // 無敵管理
     };
 
-    // 敵（犬）のデータ配列
+    // 敵（犬）＆ アイテム（魚）
     let dogs = [];
     const dogEmojis = ['🐕', '🦮', '🐕‍⬛', '🐩', '🐶'];
+    let fish = null; // 画面に1つだけ出るお魚
 
-    // 星のパーティクル（長押し中の演出）
+    // エフェクト
     let particles = [];
+    let sparkles = [];
 
-    // --- ゲームの初期化 ---
-    function initGame() {
-        score = 0;
-        frameCount = 0;
-        player.y = 200;
-        player.vy = 0;
-        dogs = [];
-        particles = [];
+    // --- 🎵 サウンドエンジン（Web Audio API） ---
+    let audioCtx = null;
+    let bgmInterval = null;
+    let bgmStep = 0;
+    // 可愛いピコピコBGMの音階メロディ（Cメジャースケール）
+    const bgmMelody = [261.63, 293.66, 329.63, 349.23, 392.00, 349.23, 329.63, 293.66];
+
+    function initAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            startBGM();
+        } else if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
     }
 
-    // --- タッチ＆クリックのイベント登録 ---
+    // 効果音をその場で合成して鳴らす関数
+    function playSound(type) {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        const now = audioCtx.currentTime;
+
+        if (type === 'jump') { // 上昇中のピロピロ音
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(300, now);
+            osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);
+            gain.gain.setValueAtTime(0.05, now);
+            gain.gain.linearRampToValueAtTime(0, now + 0.1);
+            osc.start(now); osc.stop(now + 0.1);
+        } 
+        else if (type === 'fish') { // お魚ゲット（ファンファーレ）
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(523.25, now); // ド
+            osc.frequency.setValueAtTime(659.25, now + 0.08); // ミ
+            osc.frequency.setValueAtTime(783.99, now + 0.16); // ソ
+            osc.frequency.setValueAtTime(1046.50, now + 0.24); // ド（高）
+            gain.gain.setValueAtTime(0.15, now);
+            gain.gain.linearRampToValueAtTime(0, now + 0.4);
+            osc.start(now); osc.stop(now + 0.4);
+        } 
+        else if (type === 'kick') { // 犬を吹き飛ばした音
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(150, now);
+            osc.frequency.exponentialRampToValueAtTime(600, now + 0.15);
+            gain.gain.setValueAtTime(0.2, now);
+            gain.gain.linearRampToValueAtTime(0, now + 0.15);
+            osc.start(now); osc.stop(now + 0.15);
+        } 
+        else if (type === 'gameover') { // ゲームオーバー音
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(300, now);
+            osc.frequency.linearRampToValueAtTime(100, now + 0.5);
+            gain.gain.setValueAtTime(0.2, now);
+            gain.gain.linearRampToValueAtTime(0, now + 0.5);
+            osc.start(now); osc.stop(now + 0.5);
+        }
+    }
+
+    // 自動BGMループ
+    function startBGM() {
+        if (bgmInterval) clearInterval(bgmInterval);
+        
+        // テンポ（通常時は180ms、無敵時は120msで加速）
+        let speed = player.isInvincible ? 120 : 180;
+
+        bgmInterval = setInterval(() => {
+            if (!audioCtx || gameState !== 'PLAY') return;
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            osc.type = 'triangle'; // 優しいピコピコ音
+            let freq = bgmMelody[bgmStep % bgmMelody.length];
+            // 無敵時は音程を1オクターブ上げる
+            if (player.isInvincible) freq *= 2;
+
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.03, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + speed/1000);
+            
+            osc.start();
+            osc.stop(audioCtx.currentTime + speed/1000);
+            
+            bgmStep++;
+        }, speed);
+    }
+
+    // --- ゲーム処理 ---
+    function initGame() {
+        score = 0; frameCount = 0;
+        player.y = 200; player.vy = 0; player.size = player.baseSize;
+        player.isInvincible = false; player.invincibleTimer = 0;
+        dogs = []; particles = []; sparkles = []; fish = null;
+        startBGM();
+    }
+
     window.addEventListener("mousedown", (e) => handleStart(e));
     window.addEventListener("mouseup", () => handleEnd());
     window.addEventListener("touchstart", (e) => handleStart(e), {passive: false});
@@ -90,17 +160,13 @@
 
     function handleStart(e) {
         if (e.cancelable) e.preventDefault();
+        initAudio(); // タッチされた瞬間にオーディオを有効化
         const pos = getMousePos(e);
 
         if (gameState === 'SELECT') {
-            // キャラクター選択の判定
             for (let i = 0; i < catTypes.length; i++) {
-                let col = i % 3;
-                let row = Math.floor(i / 3);
-                let bx = 200 + col * 200;
-                let by = 220 + row * 120;
-                
-                // ボタンのタッチ範囲判定
+                let col = i % 3, row = Math.floor(i / 3);
+                let bx = 200 + col * 200, by = 220 + row * 120;
                 if (Math.abs(pos.x - bx) < 70 && Math.abs(pos.y - by) < 50) {
                     selectedCat = catTypes[i].emoji;
                     gameState = 'PLAY';
@@ -111,199 +177,214 @@
         } else if (gameState === 'PLAY') {
             isPressing = true;
         } else if (gameState === 'GAMEOVER') {
-            gameState = 'SELECT'; // キャラ選択に戻る
+            gameState = 'SELECT';
         }
     }
 
-    function handleEnd() {
-        isPressing = false;
-    }
+    function handleEnd() { isPressing = false; }
 
-    // 画面が変形していても正しくタッチ座標を取得する関数
     function getMousePos(e) {
         const rect = canvas.getBoundingClientRect();
-        let clientX = e.clientX;
-        let clientY = e.clientY;
+        let clientX = e.clientX, clientY = e.clientY;
         if (e.touches && e.touches.length > 0) {
-            clientX = e.touches[0].clientX;
-            clientY = e.touches[0].clientY;
+            clientX = e.touches[0].clientX; clientY = e.touches[0].clientY;
         }
-        return {
-            x: (clientX - rect.left) * (canvas.width / rect.width),
-            y: (clientY - rect.top) * (canvas.height / rect.height)
-        };
+        return { x: (clientX - rect.left) * (canvas.width / rect.width), y: (clientY - rect.top) * (canvas.height / rect.height) };
     }
 
-    // --- メインループ ---
     function gameLoop() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // 文字の基準を中心に設定
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
 
-        if (gameState === 'SELECT') {
-            drawSelectScreen();
-        } else if (gameState === 'PLAY') {
-            updatePlay();
-            drawPlay();
-        } else if (gameState === 'GAMEOVER') {
-            drawGameOverScreen();
-        }
+        if (gameState === 'SELECT') drawSelectScreen();
+        else if (gameState === 'PLAY') { updatePlay(); drawPlay(); }
+        else if (gameState === 'GAMEOVER') drawGameOverScreen();
 
         requestAnimationFrame(gameLoop);
     }
 
-    // --- 1. キャラ選択画面の描画 ---
-    function drawSelectScreen() {
-        // タイトル
-        ctx.fillStyle = "#FF7F50";
-        ctx.font = "bold 40px Arial";
-        ctx.fillText("🐱 あつまれ！ねこちゃんダッシュ 🐕", 400, 70);
-        
-        ctx.fillStyle = "#555";
-        ctx.font = "24px Arial";
-        ctx.fillText("どっちの ねこちゃんで あそぶ？", 400, 130);
-
-        // 6種類のボタンを描画
-        for (let i = 0; i < catTypes.length; i++) {
-            let col = i % 3;
-            let row = Math.floor(i / 3);
-            let bx = 200 + col * 200;
-            let by = 220 + row * 120;
-
-            // ボタンの背景
-            ctx.fillStyle = "#FFF";
-            ctx.strokeStyle = "#FFB6C1";
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.roundRect(bx - 70, by - 50, 140, 100, 15);
-            ctx.fill();
-            ctx.stroke();
-
-            // 絵文字と名前
-            ctx.font = "50px Arial";
-            ctx.fillText(catTypes[i].emoji, bx, by - 15);
-            ctx.fillStyle = "#333";
-            ctx.font = "bold 16px Arial";
-            ctx.fillText(catTypes[i].name, bx, by + 30);
-        }
-    }
-
-    // --- 2. ゲーム中の計算と描画 ---
     function updatePlay() {
         frameCount++;
 
-        // --- 猫の操作（長押しで上昇、離して下降） ---
+        // --- 無敵タイマーの管理 ---
+        if (player.isInvincible) {
+            player.invincibleTimer--;
+            player.size = player.baseSize * 1.5; // 巨大化！
+            // 虹色用のキラキラエフェクト
+            if (frameCount % 2 === 0) {
+                sparkles.push({x: player.x + (Math.random()-0.5)*60, y: player.y + (Math.random()-0.5)*60, color: `hsl(${frameCount%360}, 100%, 70%)`, size: 8 + Math.random()*8});
+            }
+            if (player.invincibleTimer <= 0) {
+                player.isInvincible = false;
+                player.size = player.baseSize; // 元に戻る
+                startBGM(); // BGMテンポを戻す
+            }
+        }
+
+        // --- 猫の上下移動 ---
         if (isPressing) {
             player.vy += player.upForce;
-            // 長押し中は後ろから星を出す
-            if (frameCount % 3 === 0) {
-                particles.push({ x: player.x - 20, y: player.y, size: 20, vx: -4, vy: (Math.random() - 0.5) * 4 });
-            }
+            if (frameCount % 4 === 0) playSound('jump');
+            particles.push({ x: player.x - 20, y: player.y, size: 15, vx: -4, vy: (Math.random() - 0.5) * 4 });
         } else {
             player.vy += player.gravity;
         }
 
-        // 速度制限
         if (player.vy > player.speedLimit) player.vy = player.speedLimit;
         if (player.vy < -player.speedLimit) player.vy = -player.speedLimit;
-
         player.y += player.vy;
 
-        // 画面外に出ていかないようにストッパー
         if (player.y < 40) { player.y = 40; player.vy = 0; }
         if (player.y > 370) { player.y = 370; player.vy = 0; }
 
-        // --- 星のパーティクル更新 ---
-        for (let i = particles.length - 1; i >= 0; i--) {
-            particles[i].x += particles[i].vx;
-            particles[i].y += particles[i].vy;
-            if (particles[i].x < 0) particles.splice(i, 1);
+        // エフェクト更新
+        for (let i = particles.length - 1; i >= 0; i--) { particles[i].x += particles[i].vx; if (particles[i].x < 0) particles.splice(i, 1); }
+        for (let i = sparkles.length - 1; i >= 0; i--) { sparkles[i].y -= 1; sparkles[i].size -= 0.3; if (sparkles[i].size <= 0) sparkles.splice(i, 1); }
+
+        // --- お魚（アイテム）の出現＆計算 ---
+        if (!fish && frameCount % 300 === 0 && !player.isInvincible) { // 約5秒ごとにお魚チャンス
+            fish = { x: 850, y: 80 + Math.random() * 240, vx: -3, vy: Math.sin(frameCount)*2 };
+        }
+        if (fish) {
+            fish.x += fish.vx;
+            fish.y += Math.sin(frameCount * 0.05) * 2; // 上下にくねくね飛ぶ
+            
+            // 猫とお魚の当たり判定
+            let fx = player.x - fish.x, fy = player.y - fish.y;
+            if (Math.sqrt(fx*fx + fy*fy) < (player.size/2 + 25)) {
+                fish = null;
+                player.isInvincible = true;
+                player.invincibleTimer = 250; // 約4〜5秒間無敵
+                playSound('fish');
+                startBGM(); // BGM加速
+            } else if (fish.x < -50) {
+                fish = null;
+            }
         }
 
-        // --- 犬（敵）の出現（だんだん早くたくさん来るようになる） ---
-        let spawnInterval = Math.max(40, 90 - Math.floor(score / 3) * 5); 
+        // --- 犬（敵）の出現 ---
+        let spawnInterval = Math.max(30, 80 - Math.floor(score / 3) * 5); 
         if (frameCount % spawnInterval === 0) {
             dogs.push({
-                x: 850,
-                y: 50 + Math.random() * 300, // ランダムな高さ
+                x: 850, y: 50 + Math.random() * 300,
                 emoji: dogEmojis[Math.floor(Math.random() * dogEmojis.length)],
-                speed: 4 + Math.random() * 3 + (score * 0.1) // スコアに応じて少しずつ加速
+                speed: 4 + Math.random() * 3 + (score * 0.1),
+                isKicked: false, vx: 0, vy: 0 // ぶっ飛ぶ用フラグ
             });
         }
 
-        // --- 犬の移動と当たり判定 ---
+        // --- 犬の移動と判定 ---
         for (let i = dogs.length - 1; i >= 0; i--) {
+            if (dogs[i].isKicked) {
+                // 吹っ飛んでいくときの動き
+                dogs[i].x += dogs[i].vx;
+                dogs[i].y += dogs[i].vy;
+                if (dogs[i].x > 900 || dogs[i].y < -50 || dogs[i].y > 500) dogs.splice(i, 1);
+                continue;
+            }
+
             dogs[i].x -= dogs[i].speed;
 
-            // 当たり判定（猫と犬の距離が近くなったらぶつかったと判定）
-            let dx = player.x - dogs[i].x;
-            let dy = player.y - dogs[i].y;
+            let dx = player.x - dogs[i].x, dy = player.y - dogs[i].y;
             let distance = Math.sqrt(dx * dx + dy * dy);
-            if (distance < 40) { // 40ピクセル以内でアウト
-                gameState = 'GAMEOVER';
+            
+            if (distance < (player.size/2 + 20)) {
+                if (player.isInvincible) {
+                    // 【無敵モード】犬をぶっ飛ばす！
+                    dogs[i].isKicked = true;
+                    dogs[i].vx = 15; // 右へ大ジャンプ
+                    dogs[i].vy = -10 - Math.random()*10; // 上へ
+                    score += 2; // ボーナス2点！
+                    playSound('kick');
+                } else {
+                    // 通常モードならゲームオーバー
+                    gameState = 'GAMEOVER';
+                    playSound('gameover');
+                }
             }
 
-            // 画面左端を通り過ぎたらスコア加算
-            if (dogs[i].x < -50) {
-                dogs.splice(i, 1);
-                score++;
-            }
+            if (dogs[i].x < -50) { dogs.splice(i, 1); score++; }
         }
     }
 
     function drawPlay() {
-        // 背景の地面を描画（みどり色の芝生）
-        ctx.fillStyle = "#98FB98";
-        ctx.fillRect(0, 400, canvas.width, 50);
+        ctx.fillStyle = "#98FB98"; ctx.fillRect(0, 400, canvas.width, 50); // 芝生
 
-        // 星の演出を描画
+        // 長押しエフェクト（⭐）
         ctx.font = "20px Arial";
-        for (let p of particles) {
-            ctx.fillText("⭐", p.x, p.y);
+        for (let p of particles) ctx.fillText("⭐", p.x, p.y);
+
+        // 無敵のキラキラエフェクト
+        for (let sp of sparkles) {
+            ctx.fillStyle = sp.color;
+            ctx.beginPath(); ctx.arc(sp.x, sp.y, sp.size, 0, Math.PI*2); ctx.fill();
         }
 
-        // プレイヤー（選んだ猫）を描画
+        // お魚を描画
+        if (fish) { ctx.font = "40px Arial"; ctx.fillText("🐟", fish.x, fish.y); }
+
+        // プレイヤー（猫）
         ctx.font = player.size + "px Arial";
-        ctx.fillText(selectedCat, player.x, player.y);
-
-        // 敵（犬たち）を描画
-        ctx.font = "45px Arial";
-        for (let dog of dogs) {
-            ctx.fillText(dog.emoji, dog.x, dog.y);
+        if (player.isInvincible && frameCount % 4 < 2) {
+            // 無敵中はチカチカ点滅させる
+            ctx.globalAlpha = 0.5;
+            ctx.fillText(selectedCat, player.x, player.y);
+            ctx.globalAlpha = 1.0;
+        } else {
+            ctx.fillText(selectedCat, player.x, player.y);
         }
 
-        // スコア表示
-        ctx.fillStyle = "#333";
-        ctx.font = "bold 26px Arial";
-        ctx.fillText("よけた数: " + score, 100, 40);
+        // 敵（犬）
+        for (let dog of dogs) {
+            ctx.save();
+            if (dog.isKicked) {
+                // 吹っ飛んでるときは回転させる演出
+                ctx.translate(dog.x, dog.y);
+                ctx.rotate(frameCount * 0.2);
+                ctx.font = "45px Arial";
+                ctx.fillText(dog.emoji, 0, 0);
+            } else {
+                ctx.font = "45px Arial";
+                ctx.fillText(dog.emoji, dog.x, dog.y);
+            }
+            ctx.restore();
+        }
 
-        // 操作ガイド（画面上部にうっすら表示）
-        ctx.fillStyle = "rgba(0,0,0,0.3)";
-        ctx.font = "18px Arial";
-        ctx.fillText("画面を おしつづけると うえにあがるよ！", 400, 40);
+        // UI表示
+        ctx.fillStyle = "#333"; ctx.font = "bold 26px Arial";
+        ctx.fillText("スコア: " + score, 100, 40);
+
+        if (player.isInvincible) {
+            ctx.fillStyle = `hsl(${frameCount%360}, 100%, 40%)`;
+            ctx.font = "bold 26px Arial";
+            ctx.fillText("🔥 スーパーねこタイム！ 🔥", 400, 40);
+        } else {
+            ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.font = "18px Arial";
+            ctx.fillText("おさかな(🐟)をとると...！？", 400, 40);
+        }
     }
 
-    // --- 3. ゲームオーバー画面の描画 ---
+    function drawSelectScreen() {
+        ctx.fillStyle = "#FF7F50"; ctx.font = "bold 40px Arial"; ctx.fillText("🐱 スーパーねこちゃんダッシュ！ 🐕", 400, 70);
+        ctx.fillStyle = "#555"; ctx.font = "24px Arial"; ctx.fillText("どの ねこちゃんで あそぶ？（画面タッチで音が出るよ）", 400, 130);
+
+        for (let i = 0; i < catTypes.length; i++) {
+            let col = i % 3, row = Math.floor(i / 3);
+            let bx = 200 + col * 200, by = 220 + row * 120;
+            ctx.fillStyle = "#FFF"; ctx.strokeStyle = "#FFB6C1"; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.roundRect(bx - 70, by - 50, 140, 100, 15); ctx.fill(); ctx.stroke();
+            ctx.font = "50px Arial"; ctx.fillText(catTypes[i].emoji, bx, by - 15);
+            ctx.fillStyle = "#333"; ctx.font = "bold 16px Arial"; ctx.fillText(catTypes[i].name, bx, by + 30);
+        }
+    }
+
     function drawGameOverScreen() {
-        ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        ctx.fillStyle = "#FFF";
-        ctx.font = "bold 45px Arial";
-        ctx.fillText("ワンちゃんに つかまっちゃった！", 400, 160);
-
-        ctx.fillStyle = "#FFD700";
-        ctx.font = "bold 36px Arial";
-        ctx.fillText("スコア: " + score, 400, 230);
-
-        ctx.fillStyle = "#FFF";
-        ctx.font = "22px Arial";
-        ctx.fillText("画面をタッチして、もういちど遊ぶ（ねこをえらびなおす）", 400, 310);
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#FFF"; ctx.font = "bold 45px Arial"; ctx.fillText("ワンちゃんに つかまっちゃった！", 400, 160);
+        ctx.fillStyle = "#FFD700"; ctx.font = "bold 36px Arial"; ctx.fillText("スコア: " + score, 400, 230);
+        ctx.fillStyle = "#FFF"; ctx.font = "22px Arial"; ctx.fillText("画面をタッチして もういちど あそぶ", 400, 310);
     }
 
-    // ゲーム開始
     gameLoop();
 </script>
 
