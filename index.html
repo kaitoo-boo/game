@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>キッズアクションゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #87CEEB; /* 空の水色 */
+            overflow: hidden; /* スクロールバーを隠す */
+            touch-action: none; /* デフォルトのタッチ動作を無効化 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            background-color: #F0F8FF;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            max-width: 100%;
+            max-height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="800" height="400"></canvas>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // ゲームの変数
+    let isGameOver = false;
+    let score = 0;
+
+    // プレイヤー（青い四角）の設定
+    const player = {
+        x: 100,
+        y: 300,
+        width: 40,
+        height: 40,
+        dy: 0,
+        jumpForce: -12,
+        gravity: 0.6,
+        isJumping: false
+    };
+
+    // 障害物（赤い四角）の設定
+    const obstacle = {
+        x: 800,
+        y: 300,
+        width: 40,
+        height: 40,
+        speed: 5
+    };
+
+    // ジャンプ処理
+    function jump(e) {
+        if (e) e.preventDefault(); // タップ時の画面スクロールを防ぐ
+        
+        if (isGameOver) {
+            // ゲームオーバー時はリセットして再スタート
+            isGameOver = false;
+            obstacle.x = 800;
+            score = 0;
+            player.y = 300;
+            player.dy = 0;
+            gameLoop();
+            return;
+        }
+
+        if (!player.isJumping) {
+            player.dy = player.jumpForce;
+            player.isJumping = true;
+        }
+    }
+
+    // パソコンのクリックと、iPadのタップの両方に対応
+    window.addEventListener("mousedown", jump);
+    window.addEventListener("touchstart", jump, {passive: false});
+
+    // ゲームのメインループ（パラパラ漫画のように画面を更新し続ける）
+    function gameLoop() {
+        if (isGameOver) return;
+
+        // 画面をクリア
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // --- プレイヤーの動き ---
+        player.dy += player.gravity; // 重力をかける
+        player.y += player.dy;
+
+        // 地面に着いたら止まる
+        if (player.y >= 300) {
+            player.y = 300;
+            player.isJumping = false;
+        }
+
+        // プレイヤーを描画（青色）
+        ctx.fillStyle = "blue";
+        ctx.fillRect(player.x, player.y, player.width, player.height);
+
+        // --- 障害物の動き ---
+        obstacle.x -= obstacle.speed; // 左へ移動
+
+        // 画面左端まで行ったら右端に戻り、スコアアップ
+        if (obstacle.x + obstacle.width < 0) {
+            obstacle.x = 800;
+            score++;
+            obstacle.speed += 0.2; // 少しずつ速くする
+        }
+
+        // 障害物を描画（赤色）
+        ctx.fillStyle = "red";
+        ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+
+        // --- 地面を描画 ---
+        ctx.fillStyle = "#8B4513"; // 茶色
+        ctx.fillRect(0, 340, canvas.width, 60);
+
+        // --- スコアを描画 ---
+        ctx.fillStyle = "black";
+        ctx.font = "24px Arial";
+        ctx.fillText("スコア: " + score, 20, 40);
+
+        // --- 当たり判定（プレイヤーと障害物がぶつかったか） ---
+        if (
+            player.x < obstacle.x + obstacle.width &&
+            player.x + player.width > obstacle.x &&
+            player.y < obstacle.y + obstacle.height &&
+            player.y + player.height > obstacle.y
+        ) {
+            isGameOver = true;
+            ctx.fillStyle = "black";
+            ctx.font = "40px Arial";
+            ctx.fillText("ゲームオーバー！", 250, 200);
+            ctx.font = "20px Arial";
+            ctx.fillText("画面をタップしてリトライ", 290, 250);
+        }
+
+        // 次のフレームを描画
+        if (!isGameOver) {
+            requestAnimationFrame(gameLoop);
+        }
+    }
+
+    // ゲーム開始
+    gameLoop();
+</script>
+
+</body>
+</html>
