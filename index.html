@@ -2,23 +2,28 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+    <!-- iPadの全画面アプリ（PWA）に対応させるための設定 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>キッズアクションゲーム</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>あつまれ！ねこちゃんダッシュ</title>
     <style>
         body {
             margin: 0;
             padding: 0;
-            background-color: #87CEEB; /* 空の水色 */
-            overflow: hidden; /* スクロールバーを隠す */
-            touch-action: none; /* デフォルトのタッチ動作を無効化 */
+            background-color: #AEEEEE; /* 優しい水色 */
+            overflow: hidden;
+            touch-action: none; /* 画面のスクロールやズームを完全に禁止 */
             display: flex;
             justify-content: center;
             align-items: center;
             height: 100vh;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
         }
         canvas {
-            background-color: #F0F8FF;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            background-color: #E0FFFF;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+            border-radius: 12px;
             max-width: 100%;
             max-height: 100%;
         }
@@ -26,125 +31,276 @@
 </head>
 <body>
 
-<canvas id="gameCanvas" width="800" height="400"></canvas>
+<canvas id="gameCanvas" width="800" height="450"></canvas>
 
 <script>
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
 
-    // ゲームの変数
-    let isGameOver = false;
+    // ゲームの状態管理 ('SELECT' = キャラ選択, 'PLAY' = ゲーム中, 'GAMEOVER' = ゲームオーバー)
+    let gameState = 'SELECT'; 
     let score = 0;
+    let frameCount = 0;
+    let isPressing = false; // 長押し判定用
 
-    // プレイヤー（青い四角）の設定
+    // 6種類の猫キャラクター
+    const catTypes = [
+        { emoji: '🐱', name: 'まるねこ' },
+        { emoji: '🐈‍⬛', name: 'くろねこ' },
+        { emoji: '🐈', name: 'ちゃとら' },
+        { emoji: '😻', name: 'らぶねこ' },
+        { emoji: '😸', name: 'にこねこ' },
+        { emoji: '🐾', name: '肉きゅう' }
+    ];
+    let selectedCat = '🐱';
+
+    // プレイヤー（猫）のデータ
     const player = {
-        x: 100,
-        y: 300,
-        width: 40,
-        height: 40,
-        dy: 0,
-        jumpForce: -12,
-        gravity: 0.6,
-        isJumping: false
+        x: 150,
+        y: 200,
+        size: 50,
+        vy: 0,
+        gravity: 0.5,     // 離した時の落ちる強さ
+        upForce: -0.8,    // 長押しした時の浮き上がる強さ
+        speedLimit: 8     // 最大速度
     };
 
-    // 障害物（赤い四角）の設定
-    const obstacle = {
-        x: 800,
-        y: 300,
-        width: 40,
-        height: 40,
-        speed: 5
-    };
+    // 敵（犬）のデータ配列
+    let dogs = [];
+    const dogEmojis = ['🐕', '🦮', '🐕‍⬛', '🐩', '🐶'];
 
-    // ジャンプ処理
-    function jump(e) {
-        if (e) e.preventDefault(); // タップ時の画面スクロールを防ぐ
-        
-        if (isGameOver) {
-            // ゲームオーバー時はリセットして再スタート
-            isGameOver = false;
-            obstacle.x = 800;
-            score = 0;
-            player.y = 300;
-            player.dy = 0;
-            gameLoop();
-            return;
-        }
+    // 星のパーティクル（長押し中の演出）
+    let particles = [];
 
-        if (!player.isJumping) {
-            player.dy = player.jumpForce;
-            player.isJumping = true;
+    // --- ゲームの初期化 ---
+    function initGame() {
+        score = 0;
+        frameCount = 0;
+        player.y = 200;
+        player.vy = 0;
+        dogs = [];
+        particles = [];
+    }
+
+    // --- タッチ＆クリックのイベント登録 ---
+    window.addEventListener("mousedown", (e) => handleStart(e));
+    window.addEventListener("mouseup", () => handleEnd());
+    window.addEventListener("touchstart", (e) => handleStart(e), {passive: false});
+    window.addEventListener("touchend", () => handleEnd());
+
+    function handleStart(e) {
+        if (e.cancelable) e.preventDefault();
+        const pos = getMousePos(e);
+
+        if (gameState === 'SELECT') {
+            // キャラクター選択の判定
+            for (let i = 0; i < catTypes.length; i++) {
+                let col = i % 3;
+                let row = Math.floor(i / 3);
+                let bx = 200 + col * 200;
+                let by = 220 + row * 120;
+                
+                // ボタンのタッチ範囲判定
+                if (Math.abs(pos.x - bx) < 70 && Math.abs(pos.y - by) < 50) {
+                    selectedCat = catTypes[i].emoji;
+                    gameState = 'PLAY';
+                    initGame();
+                    return;
+                }
+            }
+        } else if (gameState === 'PLAY') {
+            isPressing = true;
+        } else if (gameState === 'GAMEOVER') {
+            gameState = 'SELECT'; // キャラ選択に戻る
         }
     }
 
-    // パソコンのクリックと、iPadのタップの両方に対応
-    window.addEventListener("mousedown", jump);
-    window.addEventListener("touchstart", jump, {passive: false});
+    function handleEnd() {
+        isPressing = false;
+    }
 
-    // ゲームのメインループ（パラパラ漫画のように画面を更新し続ける）
+    // 画面が変形していても正しくタッチ座標を取得する関数
+    function getMousePos(e) {
+        const rect = canvas.getBoundingClientRect();
+        let clientX = e.clientX;
+        let clientY = e.clientY;
+        if (e.touches && e.touches.length > 0) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        }
+        return {
+            x: (clientX - rect.left) * (canvas.width / rect.width),
+            y: (clientY - rect.top) * (canvas.height / rect.height)
+        };
+    }
+
+    // --- メインループ ---
     function gameLoop() {
-        if (isGameOver) return;
-
-        // 画面をクリア
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 文字の基準を中心に設定
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
 
-        // --- プレイヤーの動き ---
-        player.dy += player.gravity; // 重力をかける
-        player.y += player.dy;
-
-        // 地面に着いたら止まる
-        if (player.y >= 300) {
-            player.y = 300;
-            player.isJumping = false;
+        if (gameState === 'SELECT') {
+            drawSelectScreen();
+        } else if (gameState === 'PLAY') {
+            updatePlay();
+            drawPlay();
+        } else if (gameState === 'GAMEOVER') {
+            drawGameOverScreen();
         }
 
-        // プレイヤーを描画（青色）
-        ctx.fillStyle = "blue";
-        ctx.fillRect(player.x, player.y, player.width, player.height);
+        requestAnimationFrame(gameLoop);
+    }
 
-        // --- 障害物の動き ---
-        obstacle.x -= obstacle.speed; // 左へ移動
-
-        // 画面左端まで行ったら右端に戻り、スコアアップ
-        if (obstacle.x + obstacle.width < 0) {
-            obstacle.x = 800;
-            score++;
-            obstacle.speed += 0.2; // 少しずつ速くする
-        }
-
-        // 障害物を描画（赤色）
-        ctx.fillStyle = "red";
-        ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
-
-        // --- 地面を描画 ---
-        ctx.fillStyle = "#8B4513"; // 茶色
-        ctx.fillRect(0, 340, canvas.width, 60);
-
-        // --- スコアを描画 ---
-        ctx.fillStyle = "black";
+    // --- 1. キャラ選択画面の描画 ---
+    function drawSelectScreen() {
+        // タイトル
+        ctx.fillStyle = "#FF7F50";
+        ctx.font = "bold 40px Arial";
+        ctx.fillText("🐱 あつまれ！ねこちゃんダッシュ 🐕", 400, 70);
+        
+        ctx.fillStyle = "#555";
         ctx.font = "24px Arial";
-        ctx.fillText("スコア: " + score, 20, 40);
+        ctx.fillText("どっちの ねこちゃんで あそぶ？", 400, 130);
 
-        // --- 当たり判定（プレイヤーと障害物がぶつかったか） ---
-        if (
-            player.x < obstacle.x + obstacle.width &&
-            player.x + player.width > obstacle.x &&
-            player.y < obstacle.y + obstacle.height &&
-            player.y + player.height > obstacle.y
-        ) {
-            isGameOver = true;
-            ctx.fillStyle = "black";
-            ctx.font = "40px Arial";
-            ctx.fillText("ゲームオーバー！", 250, 200);
-            ctx.font = "20px Arial";
-            ctx.fillText("画面をタップしてリトライ", 290, 250);
+        // 6種類のボタンを描画
+        for (let i = 0; i < catTypes.length; i++) {
+            let col = i % 3;
+            let row = Math.floor(i / 3);
+            let bx = 200 + col * 200;
+            let by = 220 + row * 120;
+
+            // ボタンの背景
+            ctx.fillStyle = "#FFF";
+            ctx.strokeStyle = "#FFB6C1";
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.roundRect(bx - 70, by - 50, 140, 100, 15);
+            ctx.fill();
+            ctx.stroke();
+
+            // 絵文字と名前
+            ctx.font = "50px Arial";
+            ctx.fillText(catTypes[i].emoji, bx, by - 15);
+            ctx.fillStyle = "#333";
+            ctx.font = "bold 16px Arial";
+            ctx.fillText(catTypes[i].name, bx, by + 30);
+        }
+    }
+
+    // --- 2. ゲーム中の計算と描画 ---
+    function updatePlay() {
+        frameCount++;
+
+        // --- 猫の操作（長押しで上昇、離して下降） ---
+        if (isPressing) {
+            player.vy += player.upForce;
+            // 長押し中は後ろから星を出す
+            if (frameCount % 3 === 0) {
+                particles.push({ x: player.x - 20, y: player.y, size: 20, vx: -4, vy: (Math.random() - 0.5) * 4 });
+            }
+        } else {
+            player.vy += player.gravity;
         }
 
-        // 次のフレームを描画
-        if (!isGameOver) {
-            requestAnimationFrame(gameLoop);
+        // 速度制限
+        if (player.vy > player.speedLimit) player.vy = player.speedLimit;
+        if (player.vy < -player.speedLimit) player.vy = -player.speedLimit;
+
+        player.y += player.vy;
+
+        // 画面外に出ていかないようにストッパー
+        if (player.y < 40) { player.y = 40; player.vy = 0; }
+        if (player.y > 370) { player.y = 370; player.vy = 0; }
+
+        // --- 星のパーティクル更新 ---
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].x += particles[i].vx;
+            particles[i].y += particles[i].vy;
+            if (particles[i].x < 0) particles.splice(i, 1);
         }
+
+        // --- 犬（敵）の出現（だんだん早くたくさん来るようになる） ---
+        let spawnInterval = Math.max(40, 90 - Math.floor(score / 3) * 5); 
+        if (frameCount % spawnInterval === 0) {
+            dogs.push({
+                x: 850,
+                y: 50 + Math.random() * 300, // ランダムな高さ
+                emoji: dogEmojis[Math.floor(Math.random() * dogEmojis.length)],
+                speed: 4 + Math.random() * 3 + (score * 0.1) // スコアに応じて少しずつ加速
+            });
+        }
+
+        // --- 犬の移動と当たり判定 ---
+        for (let i = dogs.length - 1; i >= 0; i--) {
+            dogs[i].x -= dogs[i].speed;
+
+            // 当たり判定（猫と犬の距離が近くなったらぶつかったと判定）
+            let dx = player.x - dogs[i].x;
+            let dy = player.y - dogs[i].y;
+            let distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance < 40) { // 40ピクセル以内でアウト
+                gameState = 'GAMEOVER';
+            }
+
+            // 画面左端を通り過ぎたらスコア加算
+            if (dogs[i].x < -50) {
+                dogs.splice(i, 1);
+                score++;
+            }
+        }
+    }
+
+    function drawPlay() {
+        // 背景の地面を描画（みどり色の芝生）
+        ctx.fillStyle = "#98FB98";
+        ctx.fillRect(0, 400, canvas.width, 50);
+
+        // 星の演出を描画
+        ctx.font = "20px Arial";
+        for (let p of particles) {
+            ctx.fillText("⭐", p.x, p.y);
+        }
+
+        // プレイヤー（選んだ猫）を描画
+        ctx.font = player.size + "px Arial";
+        ctx.fillText(selectedCat, player.x, player.y);
+
+        // 敵（犬たち）を描画
+        ctx.font = "45px Arial";
+        for (let dog of dogs) {
+            ctx.fillText(dog.emoji, dog.x, dog.y);
+        }
+
+        // スコア表示
+        ctx.fillStyle = "#333";
+        ctx.font = "bold 26px Arial";
+        ctx.fillText("よけた数: " + score, 100, 40);
+
+        // 操作ガイド（画面上部にうっすら表示）
+        ctx.fillStyle = "rgba(0,0,0,0.3)";
+        ctx.font = "18px Arial";
+        ctx.fillText("画面を おしつづけると うえにあがるよ！", 400, 40);
+    }
+
+    // --- 3. ゲームオーバー画面の描画 ---
+    function drawGameOverScreen() {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = "#FFF";
+        ctx.font = "bold 45px Arial";
+        ctx.fillText("ワンちゃんに つかまっちゃった！", 400, 160);
+
+        ctx.fillStyle = "#FFD700";
+        ctx.font = "bold 36px Arial";
+        ctx.fillText("スコア: " + score, 400, 230);
+
+        ctx.fillStyle = "#FFF";
+        ctx.font = "22px Arial";
+        ctx.fillText("画面をタッチして、もういちど遊ぶ（ねこをえらびなおす）", 400, 310);
     }
 
     // ゲーム開始
